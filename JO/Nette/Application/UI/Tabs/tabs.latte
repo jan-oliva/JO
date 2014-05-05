@@ -1,0 +1,7 @@
+<ul class="nav nav-tabs {$mainelementClass}">
+	{if count($tabs) > 0}
+	{foreach $tabs as $name=>$tab}
+		<li n:if="$tab->isEnabled" class="{ifCurrent $tab->href}active{/ifCurrent}{if $activeTab == $name}active{/if}"><a href="{plink $tab->href ,(expand) $tab->hrefArgs}">{$tab->label}</a></li>
+	{/foreach}
+	{/if}
+</ul>
