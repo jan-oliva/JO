@@ -13,6 +13,11 @@ use Nette\DI\IContainer as IDIContainer;
  */
 class FormFactory
 {
+
+	const SUBMIT_ADD = 'submit_add';
+	const SUBMIT_EDIT = 'submit_edit';
+	const SUBMIT_STORNO = 'submit_storno';
+
 	/**
 	 *
 	 * @var
@@ -32,13 +37,27 @@ class FormFactory
 	 * @param IContainer $parent - ignorovano, pokud je predan form
 	 * @param string $name - ignorovano, pokud je predan form
 	 */
-	function __construct(IDIContainer $context,Form $form=null,  IContainer $parent=null,$name=null)
+	function __construct($context,Form $form=null,  IContainer $parent=null,$name=null)
 	{
 		$this->context = $context;
 		if(!$form instanceof Form){
 			$form = new Form($parent,$name);
+			$this->inject($form);
 		}
 		$this->form = $form;
+
+		//pridani metody addDatePicker
+		Form::extensionMethod('addDatePicker', function(Form $_this, $name, $label, $cols = NULL, $maxLength = NULL){
+			$control = new \Nette\Forms\Controls\TextInput($label,$maxLength);
+			$control->getControlPrototype()->class[] = 'bootstrap-datepicker';
+			return $_this[$name] = $control;
+		});
+
+		\Nette\Forms\Container::extensionMethod('addDatePicker', function(\Nette\Forms\Container $_this, $name, $label, $cols = NULL, $maxLength = NULL){
+			$control = new \Nette\Forms\Controls\TextInput($label,$maxLength);
+			$control->getControlPrototype()->class[] = 'bootstrap-datepicker';
+			return $_this[$name] = $control;
+		});
 	}
 
 	public function getForm()
@@ -46,4 +65,12 @@ class FormFactory
 		return $this->form;
 	}
 
+	public function inject(Form $form)
+	{
+		$translator = $this->context->getService('ITranslator');
+		if($translator instanceof \Nette\Localization\ITranslator){
+			$form->setTranslator($translator);
+
+		}
+	}
 }

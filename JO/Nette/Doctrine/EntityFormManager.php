@@ -9,14 +9,18 @@ use Nette\Diagnostics\Debugger;
 /**
  * Description of EntityFormManager
  *
- * Vytvari prvky formu dle entity.
- * Popisky poli dle #formLabel="xxx"
- * Napr.
+ * Creates form elements by entity fileds.
+ * Creates form labels by #formLabel="xxx"
+ *
+ * Example
  *  @column(type="integer") #formLabel="Unit amount"
  *	protected $count;
  *
- * Generuje instanci entity s hodnotami z formulare.
- * Nedoplnuje asociovane vlastnosti
+ * Create0 instance of entity a and fill them by form values.
+ * Don't fill fields with asociations.
+ *
+ * Works with extension Kdyby/Doctrine
+ * @see http://travis-ci.org/Kdyby/Doctrine
  *
  * @author Jan Oliva
  */
@@ -65,6 +69,14 @@ class EntityFormManager
 
 	private $timeZone = 'Europe/Prague';
 
+	/**
+	 *
+	 * @param \Nette\Application\UI\Form $form
+	 * @param object $entity
+	 * @param \Doctrine\ORM\EntityManager $em
+	 * @param string $formFieldPrefix - prefix pro nazev pole ve formulari. DFL 'F_'
+	 * @throws \BadMethodCallException
+	 */
 	function __construct(Form $form, $entity,  EntityManager $em,$formFieldPrefix=self::FORM_FIELD_PREFIX)
 	{
 		$this->form = $form;
@@ -81,7 +93,11 @@ class EntityFormManager
 	{
 		$this->reflection = new \ReflectionClass($entity);
 		$comment = $this->reflection->getDocComment();
-		return (bool)strpos($comment, '@entity');
+		$stdEntity = (bool)strpos($comment, '@entity');
+		$ormEntity = (bool)strpos($comment, '@ORM\Entity');
+		$ormEntity1 = (bool)strpos($comment, '@Doctrine\ORM\Mapping\Entity');
+
+		return $stdEntity || $ormEntity || $ormEntity1;
 
 	}
 
@@ -107,29 +123,63 @@ class EntityFormManager
 	}
 
 	/**
-	 * Doplni do formulare polozky dle entity.
-	 * U asociovanych vlastnosti vytvari select, jinak text pole.
-	 * @param type $exclude
+	 * Register form fields by entity.
+	 * For associed fileds creates input select
+	 * For boolean fields creates checkbox
+	 * For datetime fields try call addDatePicker for show date picker
+	 * For other columns creates input text
+	 *
+	 * @param array $exclude
+	 * @param bool $itemsIsWhitelist - determine wheter items are white list or blacklist
+	 * @param \Nette\Forms\Container $container If given, fields will be registered into container
 	 */
-	public function createFileds($exclude=array())
+	public function createFields($items=array(),$itemsIsWhitelist=false,\Nette\Forms\Container $container=null)
 	{
-		//asociovana data->relace je select box
+		$testInclude = $itemsIsWhitelist;
+		$object = ($container instanceof \Nette\Forms\Container) ? $container : $this->form;
+		//associed filed  data->relace creates select box
 		foreach ($this->metaData->getAssociationNames()as $prop){
-			if(!$this->isExcluded($prop, $exclude)){
+
+			if(in_array($prop, $items) === $testInclude){
 				$fieldName = $this->formFieldPrefix.$prop;
 				$caption = $this->parseFormLabel($prop);
-				$this->form->addSelect($fieldName, $caption);
-			}
-		}
-		//realne sloupce tabulky
-		foreach ($this->metaData->getColumnNames() as $prop){
-			$fieldName = $this->formFieldPrefix.$prop;
-			$caption = $this->parseFormLabel($prop);
-			if(!$this->isExcluded($prop, $exclude)){
-				$this->form->addText($fieldName, $caption);
+				$object->addSelect($fieldName, $caption);
 			}
 
 		}
+		//columns of db table
+		foreach ($this->metaData->getFieldNames() as $prop){
+
+			$fieldName = $this->formFieldPrefix.$prop;
+			if(in_array($prop, $items) !== $testInclude){
+				continue;
+			}
+			if($this->metaData->hasAssociation($prop)){
+				continue;
+			}
+			$caption = $this->parseFormLabel($prop);
+			$fieldType = $this->metaData->getTypeOfColumn($prop);
+
+			switch($fieldType){
+				case 'boolean' :
+					$object->addCheckbox($fieldName,$caption);
+					break;
+				case 'datetime' :
+					if(is_callable(array($this->form,'addDatePicker'))){
+						//rozsireni zakladniho nette formulare
+						$object->addDatePicker($fieldName,$caption);
+					}else{
+						//zakladni form bez metodu addDatePicker
+						$object->addText($fieldName, $caption);
+					}
+					break;
+				default:
+					$object->addText($fieldName, $caption);
+					break;
+			}
+
+		}
+
 
 	}
 
@@ -139,7 +189,7 @@ class EntityFormManager
 	}
 
 	/**
-	 * Hleda v anotaci vlastonosti #formLabel="popis pole"
+	 * Find annotation #formLabel="UI form label of field"
 	 * @param type $prop
 	 * @return string
 	 */
@@ -155,28 +205,62 @@ class EntityFormManager
 	}
 
 	/**
-	 * Vrati entitu s predvyplnenymi hodnotami dle formulare.
-	 * Pozor - doplnuje jen hodnoty, ktere nemaji asociaci do jine entity a skalarni hodnoty
+	 * Creates entity and fill fomm values
+	 * @param array $excludeInputs
+	 * @param \Nette\Forms\Container $container
+	 * @return object Entity
+	 */
+	public function createEntityFromForm($excludeInputs=array(),\Nette\Forms\Container $container=null)
+	{
+		$entity = $this->reflection->newInstance();
+		return $this->fillEntityFromForm($entity,$excludeInputs,$container);
+	}
+
+	/**
+	 * Fill entity by form values
+	 * Attention - Fill only fields which has noassociation and scalar values
+	 *
+	 * @param object $entity
 	 * @param array $excludeInputs
 	 * @return object Entity
 	 */
-	public function createEntityFromForm($excludeInputs=array())
+	public function fillEntityFromForm($entity,$excludeInputs=array(),\Nette\Forms\Container $container=null)
 	{
-		$instance = $this->reflection->newInstance();
-		foreach ((array)$this->form->getValues() as $key=>$val){
+		$instance =  $entity;
+		$object = ($container instanceof \Nette\Forms\Container) ? $container : $this->form;
+		foreach ((array)$object->getValues() as $key=>$val){
 
 			if($this->isExcluded($key, $excludeInputs)){
 				continue;
 			}
-
+			//form field name
 			$prop = str_replace($this->formFieldPrefix, '', $key);
 			if($this->metaData->hasAssociation($prop)){
 				continue;
 
 			}
-			$method = "set".ucfirst(str_replace($this->formFieldPrefix, '', $key));
+			//no scalar values are not supported now
+			if(!is_scalar($val)){
+				continue;
+			}
 
-			if(is_scalar($val) && $this->reflection->hasMethod($method)){
+			//fom can have fields for more entities
+			$keyTest = str_replace($this->formFieldPrefix, '', $key);
+			$method = $this->composeSetterName($keyTest);
+
+			if(!$this->metaData->hasField($keyTest)){
+				continue;
+			}
+			$type = $this->metaData->getTypeOfColumn($keyTest);
+
+			//datetime musi byt instance DateTime nebo null
+			if($type === 'datetime' && $val === ''){
+				$val = null;
+			}elseif($type === 'datetime' && $val !== ''){
+				$val = new \DateTime($val);
+			}
+			//call entity setter
+			if(is_callable(array($instance,$method))){
 				call_user_func(array($instance,$method),$val);
 			}
 		}
@@ -193,19 +277,40 @@ class EntityFormManager
 		return $method = "get".ucfirst($prop);
 	}
 
-	/**
-	 * Doplni form hodnoty z entity
-	 * @param type $entity
-	 * @param type $locale
-	 */
-	public function fillFormFromEntity($entity,$locale='cs_CZ')
+	private function composeSetterName($prop)
 	{
+		return $method = "set".ucfirst($prop);
+	}
 
-		foreach ($this->form->getControls() as $element){
+	/**
+	 * Fill form values from given entity.
+	 *
+	 * Accept
+	 *  - scalar  values
+	 *  - \DateTime object
+	 * Other typs are skipped and form fileds not filled
+	 *
+	 * @param object $entity
+	 * @param \Nette\Forms\Container $container
+	 * @param string $locale - locale for \DateTime object. Example cs_CZ|en_US|sk_SK|hu_HU ...
+	 */
+	public function fillFormFromEntity($entity,\Nette\Forms\Container $container=null,$locale='cs_CZ')
+	{
+		$object = ($container instanceof \Nette\Forms\Container) ? $container : $this->form;
+		foreach ($object->getControls() as $element){
+			/* @var $element \Nette\Forms\Controls\BaseControl */
 			$prop = $this->itemName2prop($element->getName());
 			$getter = $this->composeGetterName($prop);
 
-			if(method_exists($entity, $getter)){
+			if($element instanceof \Nette\Forms\Controls\SubmitButton){
+				continue;
+			}
+
+			if(!$this->metaData->hasField($prop)){
+				continue;
+			}
+
+			if(is_callable(array($entity,$getter))){
 
 				$val = call_user_func(array($entity,$getter));
 				//\Nette\Diagnostics\Debugger::barDump($val);

@@ -7,7 +7,6 @@ use \PM\DataGrid\DataGrid;
 
 /**
  * Description of EntityGridManager
- * Support creating data grid from Doctrine entity.
  *
  * @author Jan Oliva
  */
@@ -25,7 +24,6 @@ class EntityGridManager
 	 */
 	protected $em;
 
-
 	protected $entity;
 
 	/**
@@ -34,12 +32,6 @@ class EntityGridManager
 	 */
 	protected $metaData;
 
-	/**
-	 *
-	 * @param object $entity
-	 * @param \Doctrine\ORM\EntityManager $em
-	 * @param \PM\DataGrid\DataGrid $dg
-	 */
 	function __construct($entity, \Doctrine\ORM\EntityManager $em,$dg=null)
 	{
 		if(is_null($dg)){
@@ -51,18 +43,23 @@ class EntityGridManager
 		$this->metaData = $this->em->getClassMetadata($this->entity);
 	}
 
-	/**
-	 * Add cols to data grid by properties in entity.
-	 *
-	 * @param array $cols - whitelist of columns
-	 */
-	public function addCols($cols=array())
+	public function addCols($exclude=array())
 	{
 		foreach ($this->metaData->getColumnNames() as $prop){
 			$fieldName = $prop;
+
+			if(!$this->isIncluded($prop, $exclude)){
+				continue;
+			}
 			$caption = $this->parseFormLabel($prop);
-			if($this->isIncluded($prop, $cols)){
-				$this->dg->addColumn($fieldName, $caption);
+			$fieldType = $this->metaData->getTypeOfColumn($prop);
+			switch($fieldType){
+				case 'boolean' :
+					$this->dg->addCheckboxColumn($fieldName, $caption);
+					break;
+				default:
+					$this->dg->addColumn($fieldName, $caption);
+					break;
 			}
 
 		}
@@ -73,14 +70,7 @@ class EntityGridManager
 		return in_array($item, $exclude);
 	}
 
-	/**
-	 * Return label of proprerty from entity.
-	 * Use special anotation #formLabel="my label"
-	 *
-	 * @param string $prop
-	 * @return string
-	 */
-	protected function parseFormLabel($prop)
+	private function parseFormLabel($prop)
 	{
 		$rp = $this->metaData->getReflectionProperty($prop);
 				/* @var $rp \ReflectionProperty */
